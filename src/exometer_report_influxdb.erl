@@ -42,6 +42,7 @@
                 username :: undefined | binary(), % for http
                 password :: undefined | binary(), % for http
                 host :: inet:ip_address() | inet:hostname(), % for udp
+                host_ip :: inet:ip_address(), % for udp
                 port :: inet:port_number(),  % for udp
                 timestamping :: boolean(),
                 precision :: precision(),
@@ -69,11 +70,14 @@ exometer_init(Opts) ->
     {Timestamping, Precision} = evaluate_timestamp_opt(TimestampOpt),
     Tags = [{key(Key), Value} || {Key, Value} <- get_opt(tags, Opts, [])],
     MergedTags = merge_tags([{<<"host">>, net_adm:localhost()}], Tags),
+    {ok, HostIp} = inet:getaddr(binary_to_list(Host), inet),
+    process_flag(priority, high),
     State =  #state{protocol = Protocol, 
                     db = DB, 
                     username = Username,
                     password = Password,
                     host = binary_to_list(Host),
+                    host_ip = HostIp,
                     port = Port,
                     timestamping = Timestamping,
                     precision = Precision,
@@ -265,7 +269,7 @@ send(Packet, #state{protocol = http, connection= Connection,
             reconnect(State)
     end;
 send(Packet, #state{protocol = udp, connection = Socket, 
-                    host = Host, port = Port} = State) -> 
+                    host_ip = Host, port = Port} = State) ->
     case gen_udp:send(Socket, Host, Port, Packet) of
         ok -> {ok, State};
         Error -> 
