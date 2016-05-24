@@ -31,6 +31,12 @@
 
 -include("log.hrl").
 
+-ifdef(namespaced_types).
+-type p_dict() :: dict:dict().
+-else.
+-type p_dict() :: dict().
+-endif.
+
 -type options() :: [{atom(), any()}].
 -type value() :: any().
 -type callback_result() :: {ok, state()} | any().
@@ -46,10 +52,10 @@
                 port :: inet:port_number(),  % for udp
                 timestamping :: boolean(),
                 precision :: precision(),
-                collected_metrics :: dict(),
+                collected_metrics :: p_dict(),
                 batch_window_size = 0 :: integer(),
-                tags :: dict(),
-                metrics :: dict(),
+                tags :: p_dict(),
+                metrics :: p_dict(),
                 connection :: gen_udp:socket() | reference()}).
 -type state() :: #state{}.
 
@@ -83,8 +89,8 @@ exometer_init(Opts) ->
                     precision = Precision,
                     tags = MergedTags, 
                     batch_window_size = BatchWinSize,
-                    metrics = dict:new(),
-                    collected_metrics = dict:new()},
+                    metrics = p_dict:new(),
+                    collected_metrics = p_dict:new()},
     case connect(Protocol, Host, Port, Username, Password) of
         {ok, Connection} -> 
             ?info("InfluxDB reporter connecting success: ~p", [Opts]),
@@ -106,10 +112,10 @@ exometer_report(_Metric, _DataPoint, _Extra, _Value,
     {ok, State};
 exometer_report(Metric, DataPoint, _Extra, Value, 
                 #state{metrics = Metrics} = State) ->
-    case dict:find(Metric, Metrics) of
+    case p_dict:find(Metric, Metrics) of
         {ok, {MetricName, Tags}} ->
             maybe_send(Metric, MetricName, Tags, 
-                       dict:from_list([{DataPoint, Value}]), State);
+                       p_dict:from_list([{DataPoint, Value}]), State);
         Error -> 
             ?warning("InfluxDB reporter got trouble when looking ~p metric's tag: ~p", 
                      [Metric, Error]),
@@ -128,7 +134,7 @@ exometer_subscribe(Metric, _DataPoint, _Interval, TagOpts,
     case MetricName of
         [] -> exit({invalid_metric_name, MetricName});
         _  ->
-            NewMetrics = dict:store(Metric, {MetricName, Tags}, Metrics),
+            NewMetrics = p_dict:store(Metric, {MetricName, Tags}, Metrics),
             {ok, State#state{metrics = NewMetrics}}
     end.
 
@@ -138,7 +144,7 @@ exometer_subscribe(Metric, _DataPoint, _Interval, TagOpts,
                            state()) -> callback_result().
 exometer_unsubscribe(Metric, _DataPoint, _Extra,
                      #state{metrics = Metrics} = State) ->
-    {ok, State#state{metrics = dict:erase(Metric, Metrics)}}.
+    {ok, State#state{metrics = p_dict:erase(Metric, Metrics)}}.
 
 -spec exometer_call(any(), pid(), state()) ->
     {reply, any(), state()} | {noreply, state()} | any().
@@ -156,13 +162,13 @@ exometer_info({exometer_influxdb, send},
               #state{timestamping = Timestamping,
                      precision = Precision,
                      collected_metrics = CollectedMetrics} = State) ->
-    CollectedMetricsSize = dict:size(CollectedMetrics),
+    CollectedMetricsSize = p_dict:size(CollectedMetrics),
     if CollectedMetricsSize /= 0 ->
         ?debug("InfluxDB reporter send packet with ~p measurements", 
                [CollectedMetricsSize]),
         Packets = [make_packet(MetricName, Tags, Fileds, Timestamping, Precision) ++ "\n"
-                   || {_, {MetricName, Tags, Fileds}} <- dict:to_list(CollectedMetrics)],
-        send(Packets, State#state{collected_metrics = dict:new()});
+                   || {_, {MetricName, Tags, Fileds}} <- p_dict:to_list(CollectedMetrics)],
+        send(Packets, State#state{collected_metrics = p_dict:new()});
     true -> {ok, State}   
     end;
 exometer_info(_Unknown, State) ->
@@ -224,20 +230,20 @@ prepare_batch_send(Time) ->
 prepare_reconnect() ->
     erlang:send_after(1000, ?MODULE, {exometer_influxdb, reconnect}).
 
--spec maybe_send(list(), list(), dict(), dict(), state()) ->
+-spec maybe_send(list(), list(), p_dict(), p_dict(), state()) ->
     {ok, state()} | {error, term()}.
 maybe_send(OriginMetricName, MetricName, Tags0, Fields, 
            #state{batch_window_size = BatchWinSize, 
                   collected_metrics = CollectedMetrics} = State)
   when BatchWinSize > 0 ->
-    NewCollectedMetrics = case dict:find(OriginMetricName, CollectedMetrics) of
+    NewCollectedMetrics = case p_dict:find(OriginMetricName, CollectedMetrics) of
         {ok, {MetricName, Tags, Fields1}} ->
-            NewFields = dict:merge(fun(_Key, _Value, Value1) -> Value1 end, Fields, Fields1),
-            dict:store(OriginMetricName, {MetricName, Tags, NewFields}, CollectedMetrics);
+            NewFields = p_dict:merge(fun(_Key, _Value, Value1) -> Value1 end, Fields, Fields1),
+            p_dict:store(OriginMetricName, {MetricName, Tags, NewFields}, CollectedMetrics);
         error ->
-            dict:store(OriginMetricName, {MetricName, Tags0, Fields}, CollectedMetrics)
+            p_dict:store(OriginMetricName, {MetricName, Tags0, Fields}, CollectedMetrics)
     end,
-    dict:size(CollectedMetrics) == 0 andalso prepare_batch_send(BatchWinSize),
+    p_dict:size(CollectedMetrics) == 0 andalso prepare_batch_send(BatchWinSize),
     {ok, State#state{collected_metrics = NewCollectedMetrics}};
 maybe_send(_, MetricName, Tags, Fields, 
            #state{timestamping = Timestamping, precision = Precision} = State) ->
@@ -278,14 +284,14 @@ send(Packet, #state{protocol = udp, connection = Socket,
     end;
 send(_, #state{protocol = Protocol}) -> {error, {Protocol, not_supported}}.
 
--spec merge_tags(list() | dict(), list() | dict()) -> dict().
+-spec merge_tags(list() | p_dict(), list() | p_dict()) -> p_dict().
 merge_tags(Tags, AdditionalTags) when is_list(Tags) ->
-    merge_tags(dict:from_list(Tags), AdditionalTags);
+    merge_tags(p_dict:from_list(Tags), AdditionalTags);
 merge_tags(Tags, AdditionalTags) when is_list(AdditionalTags) ->
-    merge_tags(Tags, dict:from_list(AdditionalTags));
+    merge_tags(Tags, p_dict:from_list(AdditionalTags));
 merge_tags(Tags, AdditionalTags) ->
     try
-        dict:merge(fun(_Key, _Value, Value1) -> Value1 end, Tags, AdditionalTags)
+        p_dict:merge(fun(_Key, _Value, Value1) -> Value1 end, Tags, AdditionalTags)
     catch
         _:_ ->
             Tags
@@ -356,18 +362,18 @@ value(V) when is_binary(V) ->
 
 -spec flatten_fields(list()) -> list().
 flatten_fields(Fields) ->
-    dict:fold(fun(K, V, Acc) ->
+    p_dict:fold(fun(K, V, Acc) ->
                   [Acc, ?SEP(Acc), key(K), $=, value(V)]
               end, <<>>, Fields).
 
--spec flatten_tags(dict() | list()) -> list().
+-spec flatten_tags(p_dict() | list()) -> list().
 flatten_tags(Tags) when is_list(Tags) ->
     lists:foldl(fun({K, V}, Acc) ->
                     [Acc, ?SEP(Acc), key(K), $=, key(V)]
                 end, [], lists:keysort(1, Tags));
-flatten_tags(Tags) -> flatten_tags(dict:to_list(Tags)).
+flatten_tags(Tags) -> flatten_tags(p_dict:to_list(Tags)).
 
--spec make_packet(exometer_report:metric(), dict() | list(),
+-spec make_packet(exometer_report:metric(), p_dict() | list(),
                   list(), boolean(), precision()) -> list().
 make_packet(Measurement, Tags, Fields, Timestamping, Precision) ->
     BinaryTags = flatten_tags(Tags),
@@ -411,17 +417,17 @@ del_indices1(_List, Indices) ->
     exit({invalid_indices, Indices}).
 
 -spec evaluate_subscription_tags(list(), undefined | [{atom(), value()}]) -> 
-    {list(), dict()}.
+    {list(), p_dict()}.
 evaluate_subscription_tags(Metric, undefined) -> 
     evaluate_subscription_tags(Metric, []);
 evaluate_subscription_tags(Metric, Tags) ->
     evaluate_subscription_tags(Metric, Tags, [], []).
 
 -spec evaluate_subscription_tags(list(), [{atom(), value()}], [{atom(), value()}],
-                                 [integer()]) -> {list(), dict()}.
+                                 [integer()]) -> {list(), p_dict()}.
 evaluate_subscription_tags(Metric, [], TagAcc, PosAcc) ->
     MetricName = del_indices(Metric, PosAcc),
-    {MetricName, dict:from_list(TagAcc)};
+    {MetricName, p_dict:from_list(TagAcc)};
 evaluate_subscription_tags(Metric, [{Key, {from_name, Pos}} | TagOpts], TagAcc, PosAcc)
     when is_number(Pos), length(Metric) >= Pos, Pos > 0 ->
     NewTagAcc = TagAcc ++ [{Key, lists:nth(Pos, Metric)}],
